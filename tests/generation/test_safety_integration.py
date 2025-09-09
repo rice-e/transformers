@@ -271,8 +271,6 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         # Test with safety enabled
         safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
 
-        generation_config = GenerationConfig(safety_config=safety_config)
-
         # Test logits processor creation
         logits_processor = model._create_safety_processor(safety_config, "logits")
         self.assertIsInstance(logits_processor, SafetyLogitsProcessor)

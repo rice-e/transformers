@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Union
@@ -65,6 +66,152 @@ class SafetyResult:
     metadata: dict[str, Any]
 
 
+@dataclass
+class SafetyMetrics:
+    """
+    Metrics collection for safety operations monitoring and analysis.
+
+    Tracks performance and usage statistics for safety checking operations,
+    enabling production monitoring and optimization.
+
+    Args:
+        total_generations (`int`, defaults to 0):
+            Total number of generations attempted.
+        blocked_generations (`int`, defaults to 0):
+            Number of generations blocked due to safety violations.
+        suppression_events (`int`, defaults to 0):
+            Number of token suppression events during generation.
+        cache_hits (`int`, defaults to 0):
+            Number of cache hits for safety check results.
+        cache_misses (`int`, defaults to 0):
+            Number of cache misses requiring new safety checks.
+        total_safety_check_time_ms (`float`, defaults to 0.0):
+            Cumulative time spent on safety checks in milliseconds.
+        safety_check_count (`int`, defaults to 0):
+            Total number of safety checks performed.
+    """
+
+    total_generations: int = 0
+    blocked_generations: int = 0
+    suppression_events: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    total_safety_check_time_ms: float = 0.0
+    safety_check_count: int = 0
+
+    def __post_init__(self):
+        """Initialize thread safety lock after dataclass fields."""
+        self._lock = threading.Lock()
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Calculate cache hit rate as a percentage."""
+        total_cache_ops = self.cache_hits + self.cache_misses
+        if total_cache_ops == 0:
+            return 0.0
+        return (self.cache_hits / total_cache_ops) * 100.0
+
+    @property
+    def avg_safety_check_time_ms(self) -> float:
+        """Calculate average safety check time in milliseconds."""
+        if self.safety_check_count == 0:
+            return 0.0
+        return self.total_safety_check_time_ms / self.safety_check_count
+
+    @property
+    def block_rate(self) -> float:
+        """Calculate generation block rate as a percentage."""
+        if self.total_generations == 0:
+            return 0.0
+        return (self.blocked_generations / self.total_generations) * 100.0
+
+    def record_safety_check(self, check_time_ms: float) -> None:
+        """Record a safety check operation with timing."""
+        with self._lock:
+            self.safety_check_count += 1
+            self.total_safety_check_time_ms += check_time_ms
+
+    def record_cache_hit(self) -> None:
+        """Record a cache hit event."""
+        with self._lock:
+            self.cache_hits += 1
+
+    def record_cache_miss(self) -> None:
+        """Record a cache miss event."""
+        with self._lock:
+            self.cache_misses += 1
+
+    def record_generation_attempt(self) -> None:
+        """Record a generation attempt."""
+        with self._lock:
+            self.total_generations += 1
+
+    def record_blocked_generation(self) -> None:
+        """Record a generation that was blocked due to safety violations."""
+        with self._lock:
+            self.blocked_generations += 1
+
+    def record_suppression_event(self) -> None:
+        """Record a token suppression event."""
+        with self._lock:
+            self.suppression_events += 1
+
+    def to_dict(self) -> dict[str, Union[int, float]]:
+        """
+        Export metrics as dictionary for logging or monitoring systems.
+
+        Returns:
+            Dict[str, Union[int, float]]: Dictionary containing all metrics.
+        """
+        with self._lock:
+            return {
+                "total_generations": self.total_generations,
+                "blocked_generations": self.blocked_generations,
+                "suppression_events": self.suppression_events,
+                "cache_hits": self.cache_hits,
+                "cache_misses": self.cache_misses,
+                "cache_hit_rate": self.cache_hit_rate,
+                "avg_safety_check_time_ms": self.avg_safety_check_time_ms,
+                "block_rate": self.block_rate,
+                "safety_check_count": self.safety_check_count,
+            }
+
+    def reset(self) -> None:
+        """Reset all metrics to zero for new measurement period."""
+        with self._lock:
+            self.total_generations = 0
+            self.blocked_generations = 0
+            self.suppression_events = 0
+            self.cache_hits = 0
+            self.cache_misses = 0
+            self.total_safety_check_time_ms = 0.0
+            self.safety_check_count = 0
+
+    def combine(self, other: "SafetyMetrics") -> "SafetyMetrics":
+        """
+        Combine metrics from another SafetyMetrics instance.
+
+        Args:
+            other (SafetyMetrics): Another metrics instance to combine with.
+
+        Returns:
+            SafetyMetrics: New instance with combined metrics.
+        """
+        # Use both locks in consistent order to prevent deadlocks
+        locks = sorted([self._lock, other._lock], key=lambda x: id(x))
+        with locks[0]:
+            with locks[1]:
+                return SafetyMetrics(
+                    total_generations=self.total_generations + other.total_generations,
+                    blocked_generations=self.blocked_generations + other.blocked_generations,
+                    suppression_events=self.suppression_events + other.suppression_events,
+                    cache_hits=self.cache_hits + other.cache_hits,
+                    cache_misses=self.cache_misses + other.cache_misses,
+                    total_safety_check_time_ms=self.total_safety_check_time_ms + other.total_safety_check_time_ms,
+                    safety_check_count=self.safety_check_count + other.safety_check_count,
+                )
+
+
 class SafetyChecker(ABC):
     """
     Abstract base class for all safety checkers.
@@ -113,3 +260,107 @@ class SafetyChecker(ABC):
             `Dict[str, Any]`: Dictionary containing the checker's configuration parameters.
         """
         return {"checker_type": self.__class__.__name__}
+
+
+@dataclass
+class SafetyState:
+    """
+    Tracks incremental safety checking state for efficient sequence processing.
+
+    This class maintains state information to enable efficient sliding window
+    and incremental safety checking, avoiding redundant processing of previously
+    checked content.
+
+    Args:
+        last_check_position (`int`, *optional*, defaults to `0`):
+            The position (in tokens) where the last safety check ended.
+        last_check_result (`Optional[SafetyResult]`, *optional*):
+            The result of the last safety check performed.
+        sequence_prefix (`str`, *optional*, defaults to `""`):
+            The text prefix that has already been checked for safety.
+        is_safe_so_far (`bool`, *optional*, defaults to `True`):
+            Whether the sequence has been safe up to the last check position.
+        window_start_position (`int`, *optional*, defaults to `0`):
+            The starting position of the current sliding window.
+    """
+
+    last_check_position: int = 0
+    last_check_result: Optional[SafetyResult] = None
+    sequence_prefix: str = ""
+    is_safe_so_far: bool = True
+    window_start_position: int = 0
+
+    def should_check_incremental(self, current_position: int, min_new_tokens: int = 5) -> bool:
+        """
+        Determine if an incremental safety check should be performed.
+
+        Args:
+            current_position (`int`):
+                Current position in the sequence (in tokens).
+            min_new_tokens (`int`, *optional*, defaults to `5`):
+                Minimum number of new tokens before triggering a new check.
+
+        Returns:
+            `bool`: True if a new safety check should be performed.
+        """
+        # Always check if this is the first check
+        if self.last_check_position == 0:
+            return True
+
+        # Check if enough new tokens have been added
+        new_tokens = current_position - self.last_check_position
+        return new_tokens >= min_new_tokens
+
+    def update_check_result(self, position: int, result: SafetyResult, sequence_prefix: str = "") -> None:
+        """
+        Update the state with a new safety check result.
+
+        Args:
+            position (`int`):
+                The position where this check ended.
+            result (`SafetyResult`):
+                The safety check result.
+            sequence_prefix (`str`, *optional*, defaults to `""`):
+                The sequence prefix that was checked.
+        """
+        self.last_check_position = position
+        self.last_check_result = result
+        self.sequence_prefix = sequence_prefix
+        self.is_safe_so_far = result.is_safe if result else True
+
+    def get_incremental_text(self, full_text: str, sliding_window_size: int = -1) -> tuple[str, int]:
+        """
+        Extract the portion of text that needs incremental checking.
+
+        Args:
+            full_text (`str`):
+                The complete sequence text.
+            sliding_window_size (`int`, *optional*, defaults to `-1`):
+                Size of sliding window in characters. -1 means no sliding window.
+
+        Returns:
+            `tuple[str, int]`: The text portion to check and its start position.
+        """
+        if sliding_window_size == -1:
+            # No sliding window - return text from last check position
+            if len(self.sequence_prefix) > 0:
+                # Find where we left off and return remaining text
+                remaining_text = full_text[len(self.sequence_prefix) :]
+                return self.sequence_prefix + remaining_text, 0
+            return full_text, 0
+        else:
+            # Use sliding window
+            if len(full_text) <= sliding_window_size:
+                return full_text, 0
+            else:
+                window_start = max(0, len(full_text) - sliding_window_size)
+                self.window_start_position = window_start
+                return full_text[window_start:], window_start
+
+    def reset(self) -> None:
+        """Reset the safety state for a new sequence."""
+        self.last_check_position = 0
+        self.last_check_result = None
+        self.sequence_prefix = ""
+        self.is_safe_so_far = True
+        self.window_start_position = 0

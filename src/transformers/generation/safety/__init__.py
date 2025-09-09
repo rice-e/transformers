@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from ...utils import is_torch_available
-from .base import SafetyChecker, SafetyResult, SafetyViolation
+from .base import SafetyChecker, SafetyMetrics, SafetyResult, SafetyState, SafetyViolation
 from .configuration import SafetyConfig
 
 
@@ -30,6 +30,8 @@ __all__ = [
     "SafetyChecker",
     "SafetyResult",
     "SafetyViolation",
+    "SafetyMetrics",
+    "SafetyState",
     "SafetyConfig",
 ]
 

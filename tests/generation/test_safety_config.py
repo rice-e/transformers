@@ -76,6 +76,12 @@ class TestSafetyConfig(unittest.TestCase):
             "thresholds": {"toxicity": 0.6},
             "toxicity_model": "test/model",
             "device": "cpu",
+            "cache_size": 100,  # Default value
+            "unsafe_hash_limit": 1000,  # Default value
+            "sliding_window_size": 512,  # Default value
+            "incremental_checking": True,  # Default value
+            "prefix_lengths": [100, 75, 50],  # Default value
+            "min_text_length_for_prefix": 50,  # Default value
             "return_violations": True,
             "return_metadata": False,
         }
@@ -311,3 +317,171 @@ class TestSafetyConfig(unittest.TestCase):
         # Other config should be unaffected
         self.assertEqual(config2.checkers, ["toxicity"])
         self.assertEqual(config2.thresholds, {"toxicity": 0.7})
+
+    def test_cache_size_configuration(self):
+        """Test cache size configuration and validation."""
+        # Test default cache size
+        config = SafetyConfig()
+        self.assertEqual(config.cache_size, 100)
+
+        # Test custom cache size
+        config = SafetyConfig(cache_size=50)
+        self.assertEqual(config.cache_size, 50)
+
+        # Test cache size validation - must be positive integer (now caught in __post_init__)
+        with self.assertRaises(ValueError):
+            SafetyConfig(cache_size=0)
+
+        with self.assertRaises(ValueError):
+            SafetyConfig(cache_size=-1)
+
+        with self.assertRaises(TypeError):  # Type errors now caught immediately
+            SafetyConfig(cache_size=3.14)
+
+        with self.assertRaises(TypeError):  # Type errors now caught immediately
+            SafetyConfig(cache_size="100")
+
+    def test_unsafe_hash_limit_configuration(self):
+        """Test unsafe hash limit configuration and validation."""
+        # Test default unsafe hash limit
+        config = SafetyConfig()
+        self.assertEqual(config.unsafe_hash_limit, 1000)
+
+        # Test custom unsafe hash limit
+        config = SafetyConfig(unsafe_hash_limit=500)
+        self.assertEqual(config.unsafe_hash_limit, 500)
+
+        # Test unsafe hash limit validation - must be positive integer (now caught in __post_init__)
+        with self.assertRaises(ValueError):
+            SafetyConfig(unsafe_hash_limit=0)
+
+        with self.assertRaises(ValueError):
+            SafetyConfig(unsafe_hash_limit=-1)
+
+        with self.assertRaises(TypeError):  # Type errors now caught immediately
+            SafetyConfig(unsafe_hash_limit=2.5)
+
+        with self.assertRaises(TypeError):  # Type errors now caught immediately
+            SafetyConfig(unsafe_hash_limit="1000")
+
+    def test_large_cache_size_warning(self):
+        """Test warning for potentially inefficient cache sizes."""
+        import warnings
+
+        # Test cache size warning
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            SafetyConfig(cache_size=20000).validate()
+            self.assertEqual(len(w), 1)
+            self.assertTrue("cache_size > 10000" in str(w[0].message))
+
+        # Test unsafe hash limit warning
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            SafetyConfig(unsafe_hash_limit=200000).validate()
+            self.assertEqual(len(w), 1)
+            self.assertTrue("unsafe_hash_limit > 100000" in str(w[0].message))
+
+    def test_default_levels_include_cache_config(self):
+        """Test that default safety levels include appropriate cache configurations."""
+        strict_config = SafetyConfig.create_default("strict")
+        self.assertEqual(strict_config.cache_size, 50)
+        self.assertEqual(strict_config.unsafe_hash_limit, 500)
+
+        moderate_config = SafetyConfig.create_default("moderate")
+        self.assertEqual(moderate_config.cache_size, 100)
+        self.assertEqual(moderate_config.unsafe_hash_limit, 1000)
+
+        lenient_config = SafetyConfig.create_default("lenient")
+        self.assertEqual(lenient_config.cache_size, 200)
+        self.assertEqual(lenient_config.unsafe_hash_limit, 2000)
+
+    def test_serialization_includes_cache_config(self):
+        """Test that serialization includes cache configuration."""
+        config = SafetyConfig(cache_size=75, unsafe_hash_limit=750)
+        config_dict = config.to_dict()
+
+        self.assertEqual(config_dict["cache_size"], 75)
+        self.assertEqual(config_dict["unsafe_hash_limit"], 750)
+
+        # Test round-trip
+        restored_config = SafetyConfig.from_dict(config_dict)
+        self.assertEqual(restored_config.cache_size, 75)
+        self.assertEqual(restored_config.unsafe_hash_limit, 750)
+
+    def test_sliding_window_configuration(self):
+        """Test sliding window configuration parameters."""
+        # Test default values
+        config = SafetyConfig()
+        self.assertEqual(config.sliding_window_size, 512)
+        self.assertTrue(config.incremental_checking)
+
+        # Test custom values
+        config = SafetyConfig(sliding_window_size=256, incremental_checking=False)
+        self.assertEqual(config.sliding_window_size, 256)
+        self.assertFalse(config.incremental_checking)
+
+    def test_sliding_window_validation(self):
+        """Test validation of sliding window parameters."""
+        # Test valid sliding window size
+        config = SafetyConfig(sliding_window_size=100)
+        config.validate()  # Should not raise
+
+        # Test valid disabled sliding window
+        config = SafetyConfig(sliding_window_size=-1)
+        config.validate()  # Should not raise
+
+        # Test invalid sliding window size (0)
+        with self.assertRaises(ValueError) as context:
+            SafetyConfig(sliding_window_size=0)
+        self.assertIn("sliding_window_size must be a positive integer or -1 to disable", str(context.exception))
+
+        # Test invalid sliding window size (negative but not -1)
+        with self.assertRaises(ValueError) as context:
+            SafetyConfig(sliding_window_size=-5)
+        self.assertIn("sliding_window_size must be a positive integer or -1 to disable", str(context.exception))
+
+        # Test invalid incremental_checking type
+        with self.assertRaises(TypeError) as context:
+            SafetyConfig(incremental_checking="true")
+        self.assertIn("incremental_checking must be a boolean", str(context.exception))
+
+    def test_sliding_window_serialization(self):
+        """Test serialization of sliding window parameters."""
+        config = SafetyConfig(
+            sliding_window_size=256, incremental_checking=False, cache_size=50, unsafe_hash_limit=500
+        )
+
+        # Test to_dict includes sliding window parameters
+        config_dict = config.to_dict()
+        self.assertEqual(config_dict["sliding_window_size"], 256)
+        self.assertEqual(config_dict["incremental_checking"], False)
+
+        # Test round-trip serialization
+        restored_config = SafetyConfig.from_dict(config_dict)
+        self.assertEqual(restored_config.sliding_window_size, 256)
+        self.assertFalse(restored_config.incremental_checking)
+        self.assertEqual(restored_config.cache_size, 50)
+        self.assertEqual(restored_config.unsafe_hash_limit, 500)
+
+    def test_sliding_window_default_levels(self):
+        """Test that default safety levels work with sliding window parameters."""
+        # All default levels should have sliding window parameters
+        for level in ["strict", "moderate", "lenient"]:
+            config = SafetyConfig.create_default(level)
+            self.assertEqual(config.sliding_window_size, 512)  # Default value
+            self.assertTrue(config.incremental_checking)  # Default value
+
+    def test_sliding_window_edge_cases(self):
+        """Test edge cases for sliding window configuration."""
+        # Test very large sliding window size
+        config = SafetyConfig(sliding_window_size=10000)
+        config.validate()  # Should be valid
+
+        # Test minimum sliding window size
+        config = SafetyConfig(sliding_window_size=1)
+        config.validate()  # Should be valid
+
+        # Test both sliding window and incremental checking disabled
+        config = SafetyConfig(sliding_window_size=-1, incremental_checking=False)
+        config.validate()  # Should be valid
