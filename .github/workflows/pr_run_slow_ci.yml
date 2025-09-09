@@ -110,36 +110,36 @@ jobs:
             const commentPrefix = "**[For maintainers]** Suggested jobs to run (before merge)";
             const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000); // 30 minutes ago
             const newBody = `${commentPrefix}${process.env.BODY}`;
-            
+
             // Get all comments on the PR
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber
             });
-            
+
             // Find existing comments that start with our prefix
-            const existingComments = comments.filter(comment => 
-              comment.user.login === 'github-actions[bot]' && 
+            const existingComments = comments.filter(comment =>
+              comment.user.login === 'github-actions[bot]' &&
               comment.body.startsWith(commentPrefix)
             );
-            
+
             let shouldCreateNewComment = true;
             let commentsToDelete = [];
-            
+
             if (existingComments.length > 0) {
               // Get the most recent comment
               const mostRecentComment = existingComments
                 .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-              
+
               const commentDate = new Date(mostRecentComment.created_at);
               const isOld = commentDate < thirtyMinutesAgo;
               const isDifferentContent = mostRecentComment.body !== newBody;
-              
+
               console.log(`Most recent comment created: ${mostRecentComment.created_at}`);
               console.log(`Is older than 30 minutes: ${isOld}`);
               console.log(`Has different content: ${isDifferentContent}`);
-              
+
               if (isOld || isDifferentContent) {
                 // Delete all existing comments and create new one
                 commentsToDelete = existingComments;
@@ -152,7 +152,7 @@ jobs:
             } else {
               console.log('No existing comments found, will create new one');
             }
-            
+
             // Delete old comments if needed
             for (const comment of commentsToDelete) {
               console.log(`Deleting comment #${comment.id} (created: ${comment.created_at})`);
@@ -162,7 +162,7 @@ jobs:
                 comment_id: comment.id
               });
             }
-            
+
             // Create new comment if needed
             if (shouldCreateNewComment) {
               await github.rest.issues.createComment({

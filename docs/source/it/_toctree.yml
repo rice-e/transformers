@@ -68,4 +68,3 @@
   - local: pr_checks
     title: Controlli su una Pull Request
   title: Guide How-to
-  

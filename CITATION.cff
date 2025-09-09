@@ -3,7 +3,7 @@ date-released: 2020-10
 message: "If you use this software, please cite it using these metadata."
 title: "Transformers: State-of-the-Art Natural Language Processing"
 url: "https://github.com/huggingface/transformers"
-authors: 
+authors:
   - family-names: Wolf
     given-names: Thomas
   - family-names: Debut

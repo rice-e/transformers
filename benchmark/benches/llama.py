@@ -71,11 +71,11 @@ def run_benchmark(
         logger.error("pip install torch transformers")
         logger.error("Skipping LLaMA benchmark due to missing dependencies.")
         return
-    
+
     continue_metric_collection = Event()
     metrics_thread = None
     model_id = "meta-llama/Llama-2-7b-hf"
-    
+
     # If no metrics_recorder is provided, create one for backward compatibility
     if metrics_recorder is None:
         try:
@@ -339,7 +339,7 @@ def run_benchmark(
     continue_metric_collection.set()
     if metrics_thread is not None:
         metrics_thread.join()
-    
+
     # Only close the recorder if we created it locally
     if should_close_recorder:
-        metrics_recorder.close() 
+        metrics_recorder.close()

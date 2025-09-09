@@ -87,7 +87,7 @@ jobs:
         id: pr_info
         uses: actions/github-script@v6
         with:
-          script: |            
+          script: |
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -127,9 +127,9 @@ jobs:
 
             core.setOutput('head_commit_date', head_commit.commit.committer.date);
             core.setOutput('merge_commit_date', merge_commit.commit.committer.date);
-            
-            core.setOutput('files', files);            
-            
+
+            core.setOutput('files', files);
+
             console.log('PR head commit:', {
               head_commit: head_commit,
               commit: head_commit.commit,

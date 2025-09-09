@@ -124,3 +124,4 @@ Always test changes thoroughly:
 ## Development Methodology
 
 For planning and implementing new features, see `docs/AI_WORKFLOW.md` which contains guidance on design-first development methodology using structured design documents and AI-assisted implementation.
+- At the beginning of each new chat, please reference docs/AI_WORKFLOW.md

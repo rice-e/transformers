@@ -14,7 +14,7 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on: 
+    runs-on:
       group: aws-g5-4xlarge-cache
     container:
       image: huggingface/transformers-all-latest-gpu

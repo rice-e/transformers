@@ -98,6 +98,15 @@ else:
     _import_structure["continuous_batching"] = [
         "ContinuousMixin",
     ]
+    _import_structure["safety"] = [
+        "SafetyChecker",
+        "SafetyResult",
+        "SafetyViolation",
+        "SafetyConfig",
+        "BasicToxicityChecker",
+        "SafetyLogitsProcessor",
+        "SafetyStoppingCriteria",
+    ]
     _import_structure["utils"] = [
         "GenerationMixin",
         "GreedySearchEncoderDecoderOutput",

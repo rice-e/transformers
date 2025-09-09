@@ -20,14 +20,14 @@ jobs:
         with:
           script: |
             let files = [];
-            
+
             // Only handle push events
             if (context.eventName === 'push') {
               const afterSha = context.payload.after;
               const branchName = context.payload.ref.replace('refs/heads/', '');
-              
+
               let baseSha;
-              
+
               if (branchName === 'main') {
                 console.log('Push to main branch, comparing to parent commit');
                 // Get the parent commit of the pushed commit
@@ -44,25 +44,25 @@ jobs:
                 console.log(`Push to branch ${branchName}, comparing to main`);
                 baseSha = 'main';
               }
-              
+
               const { data: comparison } = await github.rest.repos.compareCommits({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 base: baseSha,
                 head: afterSha
               });
-              
+
               // Include added, modified, and renamed files
               files = comparison.files
                 .filter(file => file.status === 'added' || file.status === 'modified' || file.status === 'renamed')
                 .map(file => file.filename);
             }
-            
+
             // Include all files under src/transformers/ (not just models subdirectory)
-            const filteredFiles = files.filter(file => 
+            const filteredFiles = files.filter(file =>
               file.startsWith('src/transformers/')
             );
-            
+
             core.setOutput('changed_files', filteredFiles.join(' '));
             core.setOutput('any_changed', filteredFiles.length > 0 ? 'true' : 'false');
 
@@ -76,36 +76,36 @@ jobs:
           import os
           import sys
           import json
-          
+
           # Add the utils directory to Python path
           sys.path.insert(0, 'utils')
-          
+
           # Import the important models list
           from important_files import IMPORTANT_MODELS
-          
+
           print(f"Important models: {IMPORTANT_MODELS}")
-          
+
           # Get the changed files from the previous step
           changed_files_str = os.environ.get('CHANGED_FILES', '')
           changed_files = changed_files_str.split() if changed_files_str else []
-          
+
           # Filter to only Python files
           python_files = [f for f in changed_files if f.endswith('.py')]
           print(f"Python files changed: {python_files}")
-          
+
           result_models = set()
-          
+
           # Specific files that trigger all models
           transformers_utils_files = [
               'modeling_utils.py',
-              'modeling_rope_utils.py', 
+              'modeling_rope_utils.py',
               'modeling_flash_attention_utils.py',
               'modeling_attn_mask_utils.py',
               'cache_utils.py',
               'masking_utils.py',
               'pytorch_utils.py'
           ]
-          
+
           # Single loop through all Python files
           for file in python_files:
               # Check for files under src/transformers/models/
@@ -116,22 +116,22 @@ jobs:
                       if model_dir in IMPORTANT_MODELS:
                           result_models.add(model_dir)
                           print(f"Added model directory: {model_dir}")
-              
+
               # Check for specific files under src/transformers/ or src/transformers/generation/ files
               elif file.startswith('src/transformers/generation/') or \
                    (file.startswith('src/transformers/') and os.path.basename(file) in transformers_utils_files):
                   print(f"Found core file: {file} - including all important models")
                   result_models.update(IMPORTANT_MODELS)
                   break  # No need to continue once we include all models
-          
+
           # Convert to sorted list and create matrix
           result_list = sorted(list(result_models))
           print(f"Final model list: {result_list}")
-          
+
           if result_list:
               matrix_json = json.dumps(result_list)
               print(f"matrix={matrix_json}")
-              
+
               # Write to GITHUB_OUTPUT
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write(f"matrix={matrix_json}\n")
