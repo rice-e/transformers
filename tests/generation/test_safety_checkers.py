@@ -13,11 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
-from transformers.generation.safety import SafetyResult
-from transformers.testing_utils import require_torch
+
+# Add examples directory to Python path to import BasicToxicityChecker
+examples_path = Path(__file__).parent.parent.parent / "examples"
+if str(examples_path) not in sys.path:
+    sys.path.insert(0, str(examples_path))
+
+from safe_generation import BasicToxicityChecker  # noqa: E402
+
+from transformers.generation.safety import SafetyResult  # noqa: E402
+from transformers.testing_utils import require_torch  # noqa: E402
 
 
 @require_torch
@@ -57,8 +67,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
     @patch("torch.cuda.is_available", return_value=False)
     def test_init_with_defaults(self, mock_cuda):
         """Test BasicToxicityChecker initialization with default parameters."""
-        from transformers.generation.safety import BasicToxicityChecker
-
         checker = BasicToxicityChecker()
 
         self.assertEqual(checker.model_name, "s-nlp/roberta_toxicity_classifier")
@@ -69,15 +77,11 @@ class TestBasicToxicityChecker(unittest.TestCase):
     @patch("torch.cuda.is_available", return_value=True)
     def test_init_with_cuda_available(self, mock_cuda):
         """Test BasicToxicityChecker initialization when CUDA is available."""
-        from transformers.generation.safety import BasicToxicityChecker
-
         checker = BasicToxicityChecker()
         self.assertEqual(checker.device, "cuda")
 
     def test_init_with_custom_params(self):
         """Test BasicToxicityChecker initialization with custom parameters."""
-        from transformers.generation.safety import BasicToxicityChecker
-
         checker = BasicToxicityChecker(model_name="custom/model", threshold=0.8, device="cpu")
 
         self.assertEqual(checker.model_name, "custom/model")
@@ -86,8 +90,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
 
     def test_init_model_loading_failure(self):
         """Test BasicToxicityChecker handles model loading failures gracefully."""
-        from transformers.generation.safety import BasicToxicityChecker
-
         # Make model loading fail
         self.mock_model.side_effect = Exception("Model not found")
 
@@ -102,8 +104,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
     def test_safe_text_detection(self, mock_softmax, mock_no_grad):
         """Test detection of safe (non-toxic) text."""
         import torch
-
-        from transformers.generation.safety import BasicToxicityChecker
 
         # Mock safe prediction (low toxicity score)
         mock_outputs = Mock()
@@ -127,8 +127,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
     def test_toxic_text_detection(self, mock_softmax, mock_no_grad):
         """Test detection of toxic text."""
         import torch
-
-        from transformers.generation.safety import BasicToxicityChecker
 
         # Mock toxic prediction (high toxicity score)
         mock_outputs = Mock()
@@ -155,8 +153,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
         """Test batch processing of multiple texts."""
         import torch
 
-        from transformers.generation.safety import BasicToxicityChecker
-
         with patch("torch.no_grad"), patch("torch.nn.functional.softmax") as mock_softmax:
             # Mock mixed results
             mock_outputs = Mock()
@@ -173,7 +169,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
 
     def test_empty_text_handling(self):
         """Test handling of empty text input."""
-        from transformers.generation.safety import BasicToxicityChecker
 
         checker = BasicToxicityChecker()
         result = checker.check_safety("")
@@ -185,7 +180,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
 
     def test_whitespace_only_text_handling(self):
         """Test handling of whitespace-only text input."""
-        from transformers.generation.safety import BasicToxicityChecker
 
         checker = BasicToxicityChecker()
         result = checker.check_safety("   \n\t   ")
@@ -195,12 +189,10 @@ class TestBasicToxicityChecker(unittest.TestCase):
         self.assertEqual(len(result.violations), 0)
         self.assertEqual(result.metadata["reason"], "empty_text")
 
-    @patch("transformers.generation.safety.checkers.logger")
+    @patch("safe_generation.checkers.logger")
     def test_long_text_truncation(self, mock_logger):
         """Test handling of very long text input."""
         import torch
-
-        from transformers.generation.safety import BasicToxicityChecker
 
         with patch("torch.no_grad"), patch("torch.nn.functional.softmax") as mock_softmax:
             mock_outputs = Mock()
@@ -220,7 +212,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
 
     def test_invalid_input_type(self):
         """Test handling of invalid input types."""
-        from transformers.generation.safety import BasicToxicityChecker
 
         checker = BasicToxicityChecker()
 
@@ -231,7 +222,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
 
     def test_severity_classification(self):
         """Test severity classification logic."""
-        from transformers.generation.safety import BasicToxicityChecker
 
         checker = BasicToxicityChecker()
 
@@ -243,7 +233,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
 
     def test_get_config(self):
         """Test get_config method returns correct configuration."""
-        from transformers.generation.safety import BasicToxicityChecker
 
         checker = BasicToxicityChecker(model_name="test/model", threshold=0.8, device="cpu")
 
@@ -260,7 +249,6 @@ class TestBasicToxicityChecker(unittest.TestCase):
     @patch("torch.no_grad")
     def test_inference_error_handling(self, mock_no_grad):
         """Test handling of inference errors."""
-        from transformers.generation.safety import BasicToxicityChecker
 
         # Make model inference fail
         self.mock_model_instance.side_effect = RuntimeError("CUDA out of memory")

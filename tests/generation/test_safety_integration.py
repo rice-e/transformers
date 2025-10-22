@@ -13,53 +13,79 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import torch
 
-from transformers.generation.configuration_utils import GenerationConfig
-from transformers.generation.safety import SafetyConfig, SafetyResult, SafetyViolation
-from transformers.generation.safety.processors import SafetyLogitsProcessor, SafetyStoppingCriteria
-from transformers.testing_utils import require_torch
+
+# Add examples directory to Python path to import BasicToxicityChecker
+examples_path = Path(__file__).parent.parent.parent / "examples"
+if str(examples_path) not in sys.path:
+    sys.path.insert(0, str(examples_path))
+
+from safe_generation import BasicToxicityChecker  # noqa: E402
+
+from transformers.generation.configuration_utils import GenerationConfig  # noqa: E402
+from transformers.generation.safety import (  # noqa: E402
+    LENIENT_PRESET,
+    MODERATE_PRESET,
+    STRICT_PRESET,
+    SafetyChecker,
+    SafetyConfig,
+    SafetyResult,
+    SafetyViolation,
+)
+from transformers.generation.safety.processors import SafetyLogitsProcessor, SafetyStoppingCriteria  # noqa: E402
+from transformers.testing_utils import require_torch  # noqa: E402
 
 
 class TestSafetyIntegration(unittest.TestCase):
     """Integration tests for the complete safety checking workflow."""
 
+    def setUp(self):
+        """Set up mock safety checker for tests."""
+        self.mock_checker = Mock(spec=SafetyChecker)
+        self.mock_checker.check_safety.return_value = SafetyResult(
+            is_safe=True, confidence=0.9, violations=[], metadata={}
+        )
+        self.mock_checker.supported_categories = ["toxicity"]
+
     def test_complete_safety_workflow(self):
         """Test end-to-end safety checking workflow from configuration to results."""
-        # Step 1: Create and validate configuration
-        config = SafetyConfig.create_default("strict")
+        # Step 1: Create and validate configuration using watermarking pattern
+        config = SafetyConfig.from_checker(self.mock_checker, **STRICT_PRESET)
         config.validate()
 
-        # Verify configuration is set up correctly
+        # Verify configuration is set up correctly with STRICT preset values
         self.assertTrue(config.enabled)
-        self.assertEqual(config.thresholds["toxicity"], 0.5)
-        self.assertTrue(config.return_violations)
+        self.assertEqual(config.cache_size, 50)  # STRICT_PRESET value
+        self.assertEqual(config.unsafe_hash_limit, 500)  # STRICT_PRESET value
+        self.assertTrue(config.return_violations)  # STRICT_PRESET value
+        self.assertTrue(config.return_metadata)  # STRICT_PRESET value
 
         # Step 2: Test configuration serialization workflow
         config_dict = config.to_dict()
         restored_config = SafetyConfig.from_dict(config_dict)
         restored_config.validate()
 
-        self.assertEqual(config.thresholds, restored_config.thresholds)
+        # Verify serialization preserved configuration (except checker which isn't serialized)
+        self.assertEqual(config.cache_size, restored_config.cache_size)
         self.assertEqual(config.enabled, restored_config.enabled)
+        self.assertEqual(config.return_violations, restored_config.return_violations)
+        self.assertIsNone(restored_config.checker)  # Checker not serialized per watermarking pattern
 
-        # Step 3: Test utility methods
-        self.assertTrue(config.is_checker_enabled("toxicity"))
-        checker_config = config.get_checker_config("toxicity")
-
-        expected_keys = {"threshold", "device", "model_name"}
-        self.assertEqual(set(checker_config.keys()), expected_keys)
-        self.assertEqual(checker_config["threshold"], 0.5)
-        self.assertEqual(checker_config["model_name"], "unitary/toxic-bert")
+        # Step 3: Test construct_checker returns the provided instance
+        retrieved_checker = config.construct_checker()
+        self.assertIs(retrieved_checker, self.mock_checker)
 
     @require_torch
     @patch("transformers.AutoTokenizer.from_pretrained")
     @patch("transformers.AutoModelForSequenceClassification.from_pretrained")
     def test_config_to_checker_integration(self, mock_model, mock_tokenizer):
-        """Test creating a safety checker from configuration and using it."""
+        """Test watermarking pattern: creating checker and using it with SafetyConfig."""
         # Set up mocks
         mock_tokenizer_instance = Mock()
         mock_inputs = Mock()
@@ -72,27 +98,31 @@ class TestSafetyIntegration(unittest.TestCase):
         mock_model_instance.to.return_value = None
         mock_model.return_value = mock_model_instance
 
-        # Create configuration
-        config = SafetyConfig(
-            enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.8}, return_violations=True
-        )
-
-        # Create checker using configuration
-        from transformers.generation.safety import BasicToxicityChecker
-
-        checker_config = config.get_checker_config("toxicity")
-        checker = BasicToxicityChecker(**checker_config)
+        # Watermarking pattern: User creates checker instance
+        checker = BasicToxicityChecker(threshold=0.8)
 
         # Verify checker was created with correct configuration
         self.assertEqual(checker.threshold, 0.8)
-        self.assertEqual(checker.model_name, "unitary/toxic-bert")
+        self.assertEqual(checker.model_name, "s-nlp/roberta_toxicity_classifier")  # Default
         self.assertEqual(checker.supported_categories, ["toxicity"])
+
+        # Create SafetyConfig from checker instance (recommended pattern)
+        config = SafetyConfig.from_checker(checker, return_violations=True)
+
+        # Verify config was created correctly
+        self.assertTrue(config.enabled)
+        self.assertIs(config.checker, checker)
+        self.assertTrue(config.return_violations)
+
+        # Test that construct_checker returns the same instance
+        retrieved_checker = config.construct_checker()
+        self.assertIs(retrieved_checker, checker)
 
         # Test checker configuration serialization
         checker_config_dict = checker.get_config()
         expected_config = {
             "checker_type": "BasicToxicityChecker",
-            "model_name": "unitary/toxic-bert",
+            "model_name": "s-nlp/roberta_toxicity_classifier",
             "threshold": 0.8,
             "device": checker.device,
         }
@@ -105,17 +135,18 @@ class TestSafetyIntegration(unittest.TestCase):
         # Test validation utility with various configurations
         configs_to_test = [
             SafetyConfig(),  # Default
-            SafetyConfig.create_default("strict"),
-            SafetyConfig.create_default("moderate"),
-            SafetyConfig.create_default("lenient"),
+            SafetyConfig.from_checker(self.mock_checker, **STRICT_PRESET),
+            SafetyConfig.from_checker(self.mock_checker, **MODERATE_PRESET),
+            SafetyConfig.from_checker(self.mock_checker, **LENIENT_PRESET),
         ]
 
         for config in configs_to_test:
             self.assertTrue(validate_safety_config(config))
 
-        # Test with invalid configuration
-        invalid_config = SafetyConfig(thresholds={"toxicity": 1.5})
-        self.assertFalse(validate_safety_config(invalid_config))
+        # Test with invalid configuration (invalid cache_size)
+        with self.assertRaises(ValueError):
+            # __post_init__ will raise ValueError for invalid cache_size
+            SafetyConfig(cache_size=0)
 
     def test_safety_result_structure(self):
         """Test that SafetyResult and SafetyViolation work correctly together."""
@@ -150,20 +181,25 @@ class TestSafetyIntegration(unittest.TestCase):
         self.assertEqual(result.metadata["threshold"], 0.7)
 
     def test_configuration_levels_produce_different_behaviors(self):
-        """Test that different configuration levels produce appropriate settings."""
-        # Test all predefined levels
-        strict = SafetyConfig.create_default("strict")
-        moderate = SafetyConfig.create_default("moderate")
-        lenient = SafetyConfig.create_default("lenient")
+        """Test that different preset levels produce appropriate settings."""
+        # Test all predefined presets
+        strict = SafetyConfig.from_checker(self.mock_checker, **STRICT_PRESET)
+        moderate = SafetyConfig.from_checker(self.mock_checker, **MODERATE_PRESET)
+        lenient = SafetyConfig.from_checker(self.mock_checker, **LENIENT_PRESET)
 
-        # Verify thresholds are different and logical
-        self.assertEqual(strict.thresholds["toxicity"], 0.5)
-        self.assertEqual(moderate.thresholds["toxicity"], 0.7)
-        self.assertEqual(lenient.thresholds["toxicity"], 0.9)
+        # Verify cache sizes are different and logical (strict < moderate < lenient)
+        self.assertEqual(strict.cache_size, 50)
+        self.assertEqual(moderate.cache_size, 100)
+        self.assertEqual(lenient.cache_size, 200)
+        self.assertLess(strict.cache_size, moderate.cache_size)
+        self.assertLess(moderate.cache_size, lenient.cache_size)
 
-        # Verify strict < moderate < lenient
-        self.assertLess(strict.thresholds["toxicity"], moderate.thresholds["toxicity"])
-        self.assertLess(moderate.thresholds["toxicity"], lenient.thresholds["toxicity"])
+        # Verify unsafe hash limits follow same pattern
+        self.assertEqual(strict.unsafe_hash_limit, 500)
+        self.assertEqual(moderate.unsafe_hash_limit, 1000)
+        self.assertEqual(lenient.unsafe_hash_limit, 2000)
+        self.assertLess(strict.unsafe_hash_limit, moderate.unsafe_hash_limit)
+        self.assertLess(moderate.unsafe_hash_limit, lenient.unsafe_hash_limit)
 
         # Verify output configuration differences
         self.assertTrue(strict.return_violations)
@@ -174,28 +210,25 @@ class TestSafetyIntegration(unittest.TestCase):
 
     def test_error_handling_throughout_workflow(self):
         """Test error handling across the complete workflow."""
-        # Test configuration validation errors
+        # Test configuration validation errors - invalid cache_size
+        with self.assertRaises(ValueError):
+            SafetyConfig(cache_size=-1)
+
+        # Test configuration validation errors - invalid unsafe_hash_limit
+        with self.assertRaises(ValueError):
+            SafetyConfig(unsafe_hash_limit=0)
+
+        # Test construct_checker without providing checker raises error
+        config = SafetyConfig(enabled=True)
         with self.assertRaises(ValueError) as context:
-            config = SafetyConfig(checkers=["nonexistent"])
+            config.construct_checker()
+        self.assertIn("SafetyConfig requires a checker instance", str(context.exception))
+
+        # Test invalid return_violations type
+        with self.assertRaises(ValueError) as context:
+            config = SafetyConfig(return_violations="true")  # Wrong type
             config.validate()
-        self.assertIn("Unsupported checkers", str(context.exception))
-
-        # Test missing threshold error
-        with self.assertRaises(ValueError) as context:
-            config = SafetyConfig(checkers=["toxicity"], thresholds={})
-            config.validate()
-        self.assertIn("Missing threshold", str(context.exception))
-
-        # Test get_checker_config with invalid checker
-        config = SafetyConfig()
-        with self.assertRaises(ValueError) as context:
-            config.get_checker_config("nonexistent")
-        self.assertIn("not configured", str(context.exception))
-
-        # Test create_default with invalid level
-        with self.assertRaises(ValueError) as context:
-            SafetyConfig.create_default("invalid")
-        self.assertIn("Unknown safety level", str(context.exception))
+        self.assertIn("return_violations must be a boolean", str(context.exception))
 
     def test_public_api_imports(self):
         """Test that all public API components can be imported correctly."""
@@ -207,14 +240,17 @@ class TestSafetyIntegration(unittest.TestCase):
         self.assertTrue(hasattr(SafetyChecker, "supported_categories"))
 
         # Test SafetyConfig factory
-        config = SafetyConfig.create_default()
+        config = SafetyConfig.from_checker(self.mock_checker, **MODERATE_PRESET)
         self.assertIsInstance(config, SafetyConfig)
 
         # Test torch-dependent import
         from transformers.utils import is_torch_available
 
+        # Note: BasicToxicityChecker is now in examples/safe_generation (watermarking pattern)
+        # Core transformers only provides the SafetyChecker ABC
         if is_torch_available():
-            from transformers.generation.safety import BasicToxicityChecker
+            # Verify BasicToxicityChecker is available from examples
+            from safe_generation import BasicToxicityChecker
 
             self.assertTrue(issubclass(BasicToxicityChecker, SafetyChecker))
 
@@ -222,16 +258,25 @@ class TestSafetyIntegration(unittest.TestCase):
 class TestGenerationConfigIntegration(unittest.TestCase):
     """Tests for safety integration with GenerationConfig and generation pipeline."""
 
+    def setUp(self):
+        """Set up mock safety checker for tests."""
+        self.mock_checker = Mock(spec=SafetyChecker)
+        self.mock_checker.check_safety.return_value = SafetyResult(
+            is_safe=True, confidence=0.9, violations=[], metadata={}
+        )
+        self.mock_checker.supported_categories = ["toxicity"]
+
     def test_generation_config_accepts_safety_config(self):
         """Test that GenerationConfig properly accepts and stores safety_config."""
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(self.mock_checker)
 
         # Test direct parameter
         gen_config = GenerationConfig(max_length=100, safety_config=safety_config)
 
         self.assertIsNotNone(gen_config.safety_config)
         self.assertEqual(gen_config.safety_config.enabled, True)
-        self.assertEqual(gen_config.safety_config.thresholds["toxicity"], 0.7)
+        # Check preset fields instead of non-existent thresholds
+        self.assertEqual(gen_config.safety_config.cache_size, 100)  # MODERATE_PRESET default
 
         # Test None safety_config
         gen_config_none = GenerationConfig(max_length=100)
@@ -243,7 +288,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         self.assertIsNotNone(gen_config_update.safety_config)
 
     @require_torch
-    @patch("transformers.generation.safety.BasicToxicityChecker")
+    @patch("safe_generation.BasicToxicityChecker")
     def test_generation_mixin_creates_safety_processors(self, mock_checker_class):
         """Test that GenerationMixin creates safety processors when configured."""
         # Mock the checker
@@ -268,8 +313,9 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         model.tokenizer.convert_tokens_to_ids = Mock(return_value=123)
         model.tokenizer.unk_token_id = 0
 
-        # Test with safety enabled
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        # Test with safety enabled - create config with mock checker (watermarking pattern)
+        mock_checker_instance = Mock(spec=SafetyChecker)
+        safety_config = SafetyConfig.from_checker(mock_checker_instance)
 
         # Test logits processor creation
         logits_processor = model._create_safety_processor(safety_config, "logits")
@@ -288,7 +334,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         self.assertIsNone(model._create_safety_processor(None, "logits"))
 
     @require_torch
-    @patch("transformers.generation.safety.BasicToxicityChecker")
+    @patch("safe_generation.BasicToxicityChecker")
     def test_logits_processor_integration(self, mock_checker_class):
         """Test integration of safety with logits processor pipeline."""
         # Mock checker
@@ -302,7 +348,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         mock_checker_class.return_value = mock_checker
 
         # Create processor
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(self.mock_checker)
 
         # Mock tokenizer
         mock_tokenizer = Mock()
@@ -332,7 +378,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         mock_checker.check_safety.assert_called()
 
     @require_torch
-    @patch("transformers.generation.safety.BasicToxicityChecker")
+    @patch("safe_generation.BasicToxicityChecker")
     def test_stopping_criteria_integration(self, mock_checker_class):
         """Test integration of safety with stopping criteria pipeline."""
         # Mock checker with unsafe result
@@ -346,7 +392,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         mock_checker_class.return_value = mock_checker
 
         # Create stopping criteria
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(self.mock_checker)
 
         # Mock tokenizer
         mock_tokenizer = Mock()
@@ -391,9 +437,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
 
     def test_safety_config_serialization_in_generation_config(self):
         """Test that safety_config is properly serialized with GenerationConfig."""
-        safety_config = SafetyConfig(
-            enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, return_violations=True
-        )
+        safety_config = SafetyConfig.from_checker(self.mock_checker, return_violations=True)
 
         gen_config = GenerationConfig(max_length=100, safety_config=safety_config)
 
@@ -405,7 +449,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         restored = GenerationConfig.from_dict(config_dict)
         self.assertIsNotNone(restored.safety_config)
         self.assertEqual(restored.safety_config.enabled, True)
-        self.assertEqual(restored.safety_config.thresholds["toxicity"], 0.7)
+        self.assertTrue(restored.safety_config.return_violations)
 
     def test_error_handling_in_generation_integration(self):
         """Test error handling in generation pipeline integration."""
@@ -420,7 +464,8 @@ class TestGenerationConfigIntegration(unittest.TestCase):
         model._create_safety_processor = GenerationMixin._create_safety_processor.__get__(model)
         model.tokenizer = Mock()  # Add tokenizer mock
 
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        # Create config with a mock checker (required for watermarking pattern)
+        safety_config = SafetyConfig.from_checker(self.mock_checker)
 
         # Should raise ValueError for invalid processor type
         with self.assertRaises(ValueError) as context:
@@ -431,7 +476,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
     def test_end_to_end_safety_integration(self):
         """Test complete end-to-end safety integration workflow."""
         # Create safety configuration
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(self.mock_checker)
 
         # Create generation configuration with safety
         gen_config = GenerationConfig(max_length=50, temperature=0.8, safety_config=safety_config)
@@ -446,7 +491,7 @@ class TestGenerationConfigIntegration(unittest.TestCase):
 
         self.assertIsNotNone(restored_config.safety_config)
         self.assertEqual(restored_config.safety_config.enabled, True)
-        self.assertEqual(restored_config.safety_config.thresholds["toxicity"], safety_config.thresholds["toxicity"])
+        self.assertEqual(restored_config.safety_config.cache_size, safety_config.cache_size)
 
         # Verify non-safety parameters are preserved
         self.assertEqual(restored_config.max_length, 50)

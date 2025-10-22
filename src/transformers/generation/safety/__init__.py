@@ -14,14 +14,12 @@
 
 from ...utils import is_torch_available
 from .base import SafetyChecker, SafetyMetrics, SafetyResult, SafetyState, SafetyViolation
-from .configuration import SafetyConfig
+from .configuration import LENIENT_PRESET, MODERATE_PRESET, STRICT_PRESET, SafetyConfig
 
 
 if is_torch_available():
-    from .checkers import BasicToxicityChecker
     from .processors import SafetyLogitsProcessor, SafetyStoppingCriteria
 else:
-    BasicToxicityChecker = None
     SafetyLogitsProcessor = None
     SafetyStoppingCriteria = None
 
@@ -33,7 +31,10 @@ __all__ = [
     "SafetyMetrics",
     "SafetyState",
     "SafetyConfig",
+    "STRICT_PRESET",
+    "MODERATE_PRESET",
+    "LENIENT_PRESET",
 ]
 
 if is_torch_available():
-    __all__.extend(["BasicToxicityChecker", "SafetyLogitsProcessor", "SafetyStoppingCriteria"])
+    __all__.extend(["SafetyLogitsProcessor", "SafetyStoppingCriteria"])

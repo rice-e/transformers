@@ -15,12 +15,12 @@
 
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import torch
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-from transformers.generation.safety import SafetyConfig, SafetyResult, SafetyViolation
+from transformers.generation.safety import SafetyChecker, SafetyConfig, SafetyResult, SafetyViolation
 from transformers.testing_utils import require_torch, slow
 
 
@@ -31,25 +31,22 @@ class TestSafetyEndToEnd(unittest.TestCase):
         """Set up test fixtures."""
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def _setup_safety_mocks(self):
-        """Set up mocked safety checker for testing."""
-        mock_checker_patcher = patch("transformers.generation.safety.BasicToxicityChecker")
-        self.mock_checker_class = mock_checker_patcher.start()
-        self.addCleanup(mock_checker_patcher.stop)
-
-        self.mock_checker = Mock()
-        self.mock_checker_class.return_value = self.mock_checker
+    def _create_mock_checker(self):
+        """Create a mock safety checker for testing."""
+        # Create a mock checker that implements the SafetyChecker interface
+        mock_checker = Mock(spec=SafetyChecker)
+        mock_checker.supported_categories = ["toxicity"]
+        return mock_checker
 
     @require_torch
     @slow
     def test_greedy_generation_with_safety(self):
         """Test that safety works with greedy decoding generation."""
-        self._setup_safety_mocks()
+        # Create mock checker
+        mock_checker = self._create_mock_checker()
 
         # Mock safe responses
-        self.mock_checker.check_safety.return_value = SafetyResult(
-            is_safe=True, confidence=0.9, violations=[], metadata={}
-        )
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Load small model for testing
         model_name = "sshleifer/tiny-gpt2"
@@ -57,8 +54,8 @@ class TestSafetyEndToEnd(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
 
-        # Create safety configuration
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        # Create safety configuration with mock checker
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Create generation config with safety
         gen_config = GenerationConfig(
@@ -75,18 +72,17 @@ class TestSafetyEndToEnd(unittest.TestCase):
         self.assertGreater(outputs.shape[1], inputs["input_ids"].shape[1])
 
         # Verify safety checker was called
-        self.mock_checker.check_safety.assert_called()
+        mock_checker.check_safety.assert_called()
 
     @require_torch
     @slow
     def test_sample_generation_with_safety(self):
         """Test that safety works with sampling generation."""
-        self._setup_safety_mocks()
+        mock_checker = self._create_mock_checker()
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Mock safe responses
-        self.mock_checker.check_safety.return_value = SafetyResult(
-            is_safe=True, confidence=0.9, violations=[], metadata={}
-        )
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Load small model
         model_name = "sshleifer/tiny-gpt2"
@@ -95,7 +91,7 @@ class TestSafetyEndToEnd(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         # Create safety configuration
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Test sampling with safety
         inputs = tokenizer("Hello", return_tensors="pt")
@@ -103,18 +99,17 @@ class TestSafetyEndToEnd(unittest.TestCase):
 
         # Verify generation occurred
         self.assertGreater(outputs.shape[1], inputs["input_ids"].shape[1])
-        self.mock_checker.check_safety.assert_called()
+        mock_checker.check_safety.assert_called()
 
     @require_torch
     @slow
     def test_beam_search_generation_with_safety(self):
         """Test that safety works with beam search generation."""
-        self._setup_safety_mocks()
+        mock_checker = self._create_mock_checker()
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Mock safe responses
-        self.mock_checker.check_safety.return_value = SafetyResult(
-            is_safe=True, confidence=0.9, violations=[], metadata={}
-        )
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Load small model
         model_name = "sshleifer/tiny-gpt2"
@@ -123,7 +118,7 @@ class TestSafetyEndToEnd(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         # Create safety configuration
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Test beam search with safety
         inputs = tokenizer("The weather is", return_tensors="pt")
@@ -131,16 +126,17 @@ class TestSafetyEndToEnd(unittest.TestCase):
 
         # Verify generation occurred
         self.assertGreater(outputs.shape[1], inputs["input_ids"].shape[1])
-        self.mock_checker.check_safety.assert_called()
+        mock_checker.check_safety.assert_called()
 
     @require_torch
     @slow
     def test_safety_blocks_toxic_generation(self):
         """Test that generation stops when toxic content is detected."""
-        self._setup_safety_mocks()
+        mock_checker = self._create_mock_checker()
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Mock unsafe response that should stop generation
-        self.mock_checker.check_safety.return_value = SafetyResult(
+        mock_checker.check_safety.return_value = SafetyResult(
             is_safe=False,
             confidence=0.85,
             violations=[SafetyViolation("toxicity", 0.85, "high", "Toxic content detected")],
@@ -154,7 +150,7 @@ class TestSafetyEndToEnd(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
 
         # Create safety configuration
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Test generation - should stop early due to safety
         inputs = tokenizer("Test input", return_tensors="pt")
@@ -167,7 +163,7 @@ class TestSafetyEndToEnd(unittest.TestCase):
         # Should stop early due to safety stopping criteria
         # (The exact length depends on when safety check triggers)
         self.assertLessEqual(outputs.shape[1], 50)
-        self.mock_checker.check_safety.assert_called()
+        mock_checker.check_safety.assert_called()
 
     @require_torch
     @slow
@@ -186,7 +182,7 @@ class TestSafetyEndToEnd(unittest.TestCase):
         outputs_no_safety = model.generate(**inputs, max_length=20, do_sample=False)
 
         # Test with disabled safety config
-        safety_config = SafetyConfig(enabled=False)
+        safety_config = SafetyConfig(enabled=False, checker=None)
         outputs_disabled_safety = model.generate(**inputs, max_length=20, do_sample=False, safety_config=safety_config)
 
         # Results should be identical (since both use no safety)
@@ -213,13 +209,12 @@ class TestSafetyEndToEnd(unittest.TestCase):
         baseline_time = time.time() - start_time
 
         # Set up safety mocks for performance test
-        self._setup_safety_mocks()
-        self.mock_checker.check_safety.return_value = SafetyResult(
-            is_safe=True, confidence=0.9, violations=[], metadata={}
-        )
+        mock_checker = self._create_mock_checker()
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
+        mock_checker.check_safety.return_value = SafetyResult(is_safe=True, confidence=0.9, violations=[], metadata={})
 
         # Measure with safety enabled
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         start_time = time.time()
         for _ in range(3):  # Multiple runs for more stable timing

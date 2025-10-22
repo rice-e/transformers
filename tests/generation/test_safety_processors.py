@@ -18,7 +18,16 @@ from unittest.mock import Mock
 
 import torch
 
-from transformers.generation.safety import SafetyConfig, SafetyMetrics, SafetyResult, SafetyState, SafetyViolation
+from transformers.generation.safety import (
+    LENIENT_PRESET,
+    MODERATE_PRESET,
+    STRICT_PRESET,
+    SafetyConfig,
+    SafetyMetrics,
+    SafetyResult,
+    SafetyState,
+    SafetyViolation,
+)
 from transformers.generation.safety.processors import (
     SafetyLogitsProcessor,
     SafetyStoppingCriteria,
@@ -43,8 +52,8 @@ class TestSafetyLogitsProcessor(unittest.TestCase):
         self.mock_tokenizer = Mock()
         self.mock_tokenizer.decode.return_value = "test text"
 
-        # Safety config
-        self.safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        # Safety config (watermarking pattern - use from_checker)
+        self.safety_config = SafetyConfig.from_checker(self.mock_checker)
 
     def test_safe_content_no_suppression(self):
         """Test that safe content passes through without modification."""
@@ -189,8 +198,8 @@ class TestSafetyStoppingCriteria(unittest.TestCase):
         self.mock_tokenizer = Mock()
         self.mock_tokenizer.decode.return_value = "test text"
 
-        # Safety config
-        self.safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        # Safety config (watermarking pattern - use from_checker)
+        self.safety_config = SafetyConfig.from_checker(self.mock_checker)
 
     def test_safe_content_continue_generation(self):
         """Test that safe content allows generation to continue."""
@@ -591,7 +600,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer.decode.return_value = "test unsafe text"
 
         # Safety config
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Create processor
         processor = SafetyLogitsProcessor(
@@ -627,7 +636,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer.decode.return_value = "test unsafe text"
 
         # Safety config
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Create stopping criteria
         criteria = SafetyStoppingCriteria(
@@ -714,9 +723,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer = Mock()
 
         # Safety config - disable incremental checking for this test to ensure all calls are made
-        safety_config = SafetyConfig(
-            enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, incremental_checking=False
-        )
+        safety_config = SafetyConfig.from_checker(mock_checker, incremental_checking=False)
 
         # Create processor
         processor = SafetyLogitsProcessor(
@@ -773,7 +780,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer.decode.return_value = "unsafe text"
 
         # Safety config
-        safety_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        safety_config = SafetyConfig.from_checker(mock_checker)
 
         # Create processor
         processor = SafetyLogitsProcessor(
@@ -801,7 +808,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer = Mock()
 
         # Test small cache size
-        small_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, cache_size=5)
+        small_config = SafetyConfig.from_checker(mock_checker, cache_size=5)
         processor = SafetyLogitsProcessor(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=small_config
         )
@@ -810,7 +817,7 @@ class TestSafetyMetrics(unittest.TestCase):
         self.assertEqual(processor._sequence_cache.max_size, 5)
 
         # Test large cache size
-        large_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, cache_size=250)
+        large_config = SafetyConfig.from_checker(mock_checker, cache_size=250)
         processor = SafetyLogitsProcessor(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=large_config
         )
@@ -828,9 +835,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer = Mock()
 
         # Test custom configuration
-        custom_config = SafetyConfig(
-            enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, cache_size=30, unsafe_hash_limit=300
-        )
+        custom_config = SafetyConfig.from_checker(mock_checker, cache_size=30, unsafe_hash_limit=300)
 
         criteria = SafetyStoppingCriteria(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=custom_config
@@ -848,7 +853,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer = Mock()
 
         # Test strict configuration
-        strict_config = SafetyConfig.create_default("strict")
+        strict_config = SafetyConfig.from_checker(mock_checker, **STRICT_PRESET)
         processor = SafetyLogitsProcessor(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=strict_config
         )
@@ -860,14 +865,14 @@ class TestSafetyMetrics(unittest.TestCase):
         self.assertEqual(criteria._unsafe_hash_limit, 500)
 
         # Test moderate configuration
-        moderate_config = SafetyConfig.create_default("moderate")
+        moderate_config = SafetyConfig.from_checker(mock_checker, **MODERATE_PRESET)
         processor = SafetyLogitsProcessor(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=moderate_config
         )
         self.assertEqual(processor._sequence_cache.max_size, 100)
 
         # Test lenient configuration
-        lenient_config = SafetyConfig.create_default("lenient")
+        lenient_config = SafetyConfig.from_checker(mock_checker, **LENIENT_PRESET)
         processor = SafetyLogitsProcessor(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=lenient_config
         )
@@ -881,7 +886,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer = Mock()
 
         # Create a config that might not have cache_size (simulate old configs)
-        config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7})
+        config = SafetyConfig.from_checker(mock_checker)
         # Temporarily remove cache_size attribute to simulate old config
         if hasattr(config, "cache_size"):
             delattr(config, "cache_size")
@@ -901,7 +906,7 @@ class TestSafetyMetrics(unittest.TestCase):
         mock_tokenizer = Mock()
 
         # Test minimum cache size (1)
-        min_config = SafetyConfig(enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, cache_size=1)
+        min_config = SafetyConfig.from_checker(mock_checker, cache_size=1)
         processor = SafetyLogitsProcessor(
             safety_checker=mock_checker, tokenizer=mock_tokenizer, safety_config=min_config
         )
@@ -1013,10 +1018,8 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
         self.mock_tokenizer.decode.return_value = long_text
 
         # Test with sliding window enabled
-        config = SafetyConfig(
-            enabled=True,
-            checkers=["toxicity"],
-            thresholds={"toxicity": 0.7},
+        config = SafetyConfig.from_checker(
+            self.mock_checker,
             sliding_window_size=100,
             incremental_checking=True,
         )
@@ -1050,10 +1053,8 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
         self.mock_tokenizer.decode.return_value = long_text
 
         # Test with sliding window enabled
-        config = SafetyConfig(
-            enabled=True,
-            checkers=["toxicity"],
-            thresholds={"toxicity": 0.7},
+        config = SafetyConfig.from_checker(
+            self.mock_checker,
             sliding_window_size=100,
             incremental_checking=True,
         )
@@ -1085,9 +1086,7 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
         self.mock_checker.check_safety.side_effect = count_check_calls
 
         # Create processor with incremental checking
-        config = SafetyConfig(
-            enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, incremental_checking=True
-        )
+        config = SafetyConfig.from_checker(self.mock_checker, incremental_checking=True)
 
         processor = SafetyLogitsProcessor(
             safety_checker=self.mock_checker,
@@ -1120,10 +1119,8 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
             metadata={},
         )
 
-        config = SafetyConfig(
-            enabled=True,
-            checkers=["toxicity"],
-            thresholds={"toxicity": 0.7},
+        config = SafetyConfig.from_checker(
+            self.mock_checker,
             sliding_window_size=50,
             incremental_checking=True,
         )
@@ -1146,10 +1143,8 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
     def test_prefix_cache_functionality(self):
         """Test that prefix caching works correctly."""
         # This test verifies the _PrefixSafetyCache is used when incremental_checking=True
-        config = SafetyConfig(
-            enabled=True,
-            checkers=["toxicity"],
-            thresholds={"toxicity": 0.7},
+        config = SafetyConfig.from_checker(
+            self.mock_checker,
             incremental_checking=True,  # Should use prefix cache
             cache_size=50,
         )
@@ -1164,10 +1159,8 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
         self.assertIsInstance(processor._sequence_cache, _PrefixSafetyCache)
 
         # Test with incremental_checking=False
-        config_no_incremental = SafetyConfig(
-            enabled=True,
-            checkers=["toxicity"],
-            thresholds={"toxicity": 0.7},
+        config_no_incremental = SafetyConfig.from_checker(
+            self.mock_checker,
             incremental_checking=False,  # Should use simple cache
         )
 
@@ -1182,9 +1175,7 @@ class TestSlidingWindowFunctionality(unittest.TestCase):
 
     def test_safety_state_reset_functionality(self):
         """Test that safety states can be reset properly."""
-        config = SafetyConfig(
-            enabled=True, checkers=["toxicity"], thresholds={"toxicity": 0.7}, incremental_checking=True
-        )
+        config = SafetyConfig.from_checker(self.mock_checker, incremental_checking=True)
 
         processor = SafetyLogitsProcessor(
             safety_checker=self.mock_checker, tokenizer=self.mock_tokenizer, safety_config=config

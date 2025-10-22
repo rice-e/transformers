@@ -15,17 +15,16 @@
 
 from typing import Any, Optional, Union
 
-from ...utils import is_torch_available, logging
-from .base import SafetyChecker, SafetyResult, SafetyViolation
-
-
-if not is_torch_available():
-    raise ImportError("PyTorch is required to use safety checkers. Please install PyTorch: pip install torch")
-
 import torch
 import torch.nn.functional as F
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers.generation.safety import SafetyChecker, SafetyResult, SafetyViolation
+from transformers.utils import is_torch_available, logging
+
+
+if not is_torch_available():
+    raise ImportError("PyTorch is required to use safety checkers. Please install PyTorch: pip install torch")
 
 
 logger = logging.get_logger(__name__)
@@ -38,6 +37,10 @@ class BasicToxicityChecker(SafetyChecker):
     This checker uses a pre-trained RoBERTa model to detect toxic content in text. It supports both
     single text and batch processing, with configurable thresholds and automatic device selection.
 
+    This is a reference implementation provided in the examples directory to demonstrate how to
+    implement custom safety checkers. The core transformers library provides only the infrastructure
+    (SafetyChecker abstract base class, processors, configuration).
+
     Args:
         model_name (`str`, *optional*, defaults to `"s-nlp/roberta_toxicity_classifier"`):
             The name of the pre-trained model to use for toxicity detection.
@@ -45,6 +48,20 @@ class BasicToxicityChecker(SafetyChecker):
             The toxicity score threshold above which content is considered unsafe.
         device (`str`, *optional*):
             The device to run the model on. If None, automatically selects CUDA if available, else CPU.
+
+    Examples:
+    ```python
+    >>> from examples.safe_generation import BasicToxicityChecker
+    >>> from transformers.generation.safety import SafetyConfig
+    >>> from transformers import pipeline
+
+    >>> # Create checker
+    >>> checker = BasicToxicityChecker(threshold=0.7)
+
+    >>> # Use with SafetyConfig
+    >>> config = SafetyConfig.from_checker(checker)
+    >>> pipe = pipeline("text-generation", model="gpt2", safety_config=config)
+    ```
     """
 
     def __init__(

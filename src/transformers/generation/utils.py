@@ -1107,11 +1107,18 @@ class GenerationMixin(ContinuousMixin):
             return None
 
         try:
-            from .safety import BasicToxicityChecker, SafetyLogitsProcessor, SafetyStoppingCriteria
+            from .safety import SafetyLogitsProcessor, SafetyStoppingCriteria
 
-            # Create checker based on configuration
-            # For now, use BasicToxicityChecker as the default
-            safety_checker = BasicToxicityChecker()
+            # Get checker from configuration using construct_checker()
+            # Following watermarking pattern - user must provide checker instance
+            try:
+                safety_checker = safety_config.construct_checker()
+            except ValueError as e:
+                raise ValueError(
+                    f"Safety configuration error: {e}\n"
+                    "You must provide a SafetyChecker instance in SafetyConfig. "
+                    "See examples/safe_generation/ for reference implementations."
+                ) from e
 
             if processor_type == "logits":
                 return SafetyLogitsProcessor(
@@ -1134,7 +1141,7 @@ class GenerationMixin(ContinuousMixin):
             logger.warning("Safety module not available - cannot create safety processors")
             return None
         except ValueError:
-            # Re-raise ValueError for input validation errors (like invalid processor_type)
+            # Re-raise ValueError for input validation errors (like invalid processor_type or missing checker)
             raise
         except Exception as e:
             logger.warning(f"Failed to create safety {processor_type} processor: {e}")

@@ -9,16 +9,19 @@ real-time safety filtering (toxicity) using Transformers' safety utilities.
 
 import os
 import platform
+import sys
+from pathlib import Path
 
 import torch
 
+
+# Add safe_generation to path to import BasicToxicityChecker
+sys.path.insert(0, str(Path(__file__).parent / "safe_generation"))
+
+from safe_generation import BasicToxicityChecker
+
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-from transformers.generation.safety import (
-    BasicToxicityChecker,
-    SafetyConfig,
-    SafetyLogitsProcessor,
-    SafetyStoppingCriteria,
-)
+from transformers.generation.safety import SafetyConfig, SafetyLogitsProcessor, SafetyStoppingCriteria
 
 
 def get_device():
@@ -43,11 +46,13 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     # Build safety components with strict threshold
-    safety_config = SafetyConfig.create_default("strict")
     toxicity_threshold = 0.7  # Strict threshold for demo
     safety_checker = BasicToxicityChecker(
         model_name="s-nlp/roberta_toxicity_classifier", threshold=toxicity_threshold, device="cpu"
     )
+
+    # Create safety config from checker (following watermarking pattern)
+    safety_config = SafetyConfig.from_checker(safety_checker)
 
     from transformers.generation.logits_process import LogitsProcessorList
     from transformers.generation.stopping_criteria import StoppingCriteriaList

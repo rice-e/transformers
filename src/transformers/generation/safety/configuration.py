@@ -13,9 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from .base import SafetyChecker
 
 
 # Constants for validation warnings
@@ -28,18 +34,17 @@ class SafetyConfig:
     """
     Configuration for safety checking in text generation.
 
-    This class manages all safety-related parameters including which checkers to use,
-    their thresholds, model configurations, and output preferences.
+    This configuration class stores settings for safety checking and accepts a user-provided
+    safety checker instance. The transformers library provides the infrastructure
+    (SafetyChecker abstract base, processors, configuration), while users implement
+    concrete checkers for their specific safety requirements.
 
     Args:
         enabled (`bool`, *optional*, defaults to `False`):
             Whether safety checking is enabled.
-        checkers (`List[str]`, *optional*, defaults to `["toxicity"]`):
-            List of safety checkers to use (e.g., ["toxicity", "bias"]).
-        thresholds (`Dict[str, float]`, *optional*, defaults to `{"toxicity": 0.7}`):
-            Threshold values for each checker. Values should be between 0.0 and 1.0.
-        toxicity_model (`str`, *optional*, defaults to `"unitary/toxic-bert"`):
-            The model to use for toxicity detection.
+        checker (`SafetyChecker`, *optional*, defaults to `None`):
+            The safety checker instance to use. Must be provided by the user.
+            See examples/safe_generation/ for reference implementations.
         device (`str`, *optional*):
             Device to run models on. If None, automatically selects CUDA if available.
         cache_size (`int`, *optional*, defaults to `100`):
@@ -62,33 +67,31 @@ class SafetyConfig:
 
     Examples:
     ```python
-    # Basic configuration
-    config = SafetyConfig(enabled=True)
+    # Using a reference implementation from examples
+    from examples.safe_generation import BasicToxicityChecker
+    from transformers.generation.safety import SafetyConfig
 
-    # Strict toxicity checking
-    config = SafetyConfig(
-        enabled=True,
-        thresholds={"toxicity": 0.5},
-        return_violations=True
-    )
+    # Create checker instance
+    checker = BasicToxicityChecker(threshold=0.7)
 
-    # Custom model configuration
-    config = SafetyConfig(
-        enabled=True,
-        toxicity_model="custom/toxicity-model",
-        device="cuda"
-    )
+    # Option 1: Create config with from_checker()
+    config = SafetyConfig.from_checker(checker)
+
+    # Option 2: Create config directly
+    config = SafetyConfig(enabled=True, checker=checker)
+
+    # Use with generation
+    from transformers import pipeline
+    pipe = pipeline("text-generation", model="gpt2", safety_config=config)
     ```
     """
 
     # Checker configuration
     enabled: bool = False
-    checkers: list[str] = field(default_factory=lambda: ["toxicity"])
-    thresholds: dict[str, float] = field(default_factory=lambda: {"toxicity": 0.7})
+    checker: SafetyChecker | None = None
 
-    # Model configuration
-    toxicity_model: str = "unitary/toxic-bert"
-    device: Optional[str] = None
+    # Device configuration
+    device: str | None = None
 
     # Performance configuration
     cache_size: int = 100
@@ -143,14 +146,14 @@ class SafetyConfig:
         """
         Convert to dictionary for serialization.
 
+        Note: The checker instance is not serialized. You must recreate it when
+        deserializing.
+
         Returns:
             `Dict[str, Any]`: Dictionary representation of the configuration.
         """
         return {
             "enabled": self.enabled,
-            "checkers": self.checkers,
-            "thresholds": self.thresholds,
-            "toxicity_model": self.toxicity_model,
             "device": self.device,
             "cache_size": self.cache_size,
             "unsafe_hash_limit": self.unsafe_hash_limit,
@@ -160,10 +163,11 @@ class SafetyConfig:
             "min_text_length_for_prefix": self.min_text_length_for_prefix,
             "return_violations": self.return_violations,
             "return_metadata": self.return_metadata,
+            # Note: checker is not serialized - must be provided when deserializing
         }
 
     @classmethod
-    def from_dict(cls, config_dict: dict[str, Any]) -> "SafetyConfig":
+    def from_dict(cls, config_dict: dict[str, Any]) -> SafetyConfig:
         """
         Create SafetyConfig from dictionary.
 
@@ -186,28 +190,6 @@ class SafetyConfig:
         if not isinstance(self.enabled, bool):
             raise ValueError("enabled must be a boolean")
 
-        # Validate checkers is a list
-        if not isinstance(self.checkers, list):
-            raise ValueError("checkers must be a list")
-
-        # Validate thresholds
-        if not isinstance(self.thresholds, dict):
-            raise ValueError("thresholds must be a dictionary")
-
-        if not all(isinstance(t, (int, float)) and 0.0 <= t <= 1.0 for t in self.thresholds.values()):
-            raise ValueError("All thresholds must be numbers between 0.0 and 1.0")
-
-        # Validate supported checkers
-        supported_checkers = {"toxicity"}  # Expandable in future phases
-        if not all(c in supported_checkers for c in self.checkers):
-            unsupported = set(self.checkers) - supported_checkers
-            raise ValueError(f"Unsupported checkers: {unsupported}")
-
-        # Validate consistency between checkers and thresholds
-        for checker in self.checkers:
-            if checker not in self.thresholds:
-                raise ValueError(f"Missing threshold for checker: {checker}")
-
         # Warn about potentially inefficient configurations (validation done in __post_init__)
         if self.cache_size > WARNING_CACHE_SIZE_LIMIT:
             warnings.warn(f"cache_size > {WARNING_CACHE_SIZE_LIMIT} may use excessive memory", UserWarning)
@@ -222,103 +204,103 @@ class SafetyConfig:
         if not isinstance(self.return_metadata, bool):
             raise ValueError("return_metadata must be a boolean")
 
-    def get_checker_config(self, checker_name: str) -> dict[str, Any]:
+    def construct_checker(self) -> SafetyChecker:
         """
-        Get configuration for a specific checker.
+        Retrieve the safety checker from the configuration.
 
-        Args:
-            checker_name (`str`): Name of the checker to get configuration for.
+        Returns the user-provided checker instance that was specified when creating
+        the configuration.
 
         Returns:
-            `Dict[str, Any]`: Configuration parameters for the specified checker.
+            `SafetyChecker`: The safety checker instance.
 
         Raises:
-            ValueError: If the checker is not configured.
-        """
-        if checker_name not in self.checkers:
-            raise ValueError(f"Checker '{checker_name}' not configured")
-
-        config = {"threshold": self.thresholds.get(checker_name, 0.7), "device": self.device}
-
-        # Add checker-specific configuration
-        if checker_name == "toxicity":
-            config["model_name"] = self.toxicity_model
-
-        return config
-
-    def is_checker_enabled(self, checker_name: str) -> bool:
-        """
-        Check if a specific checker is enabled.
-
-        Args:
-            checker_name (`str`): Name of the checker to check.
-
-        Returns:
-            `bool`: True if the checker is enabled, False otherwise.
-        """
-        return self.enabled and checker_name in self.checkers
-
-    @classmethod
-    def create_default(cls, level: str = "moderate") -> "SafetyConfig":
-        """
-        Create a default configuration with predefined safety levels.
-
-        Args:
-            level (`str`, *optional*, defaults to `"moderate"`):
-                Safety level. One of "strict", "moderate", or "lenient".
-
-        Returns:
-            `SafetyConfig`: Pre-configured SafetyConfig instance.
-
-        Raises:
-            ValueError: If the safety level is not recognized.
+            ValueError: If no checker instance is provided.
 
         Examples:
         ```python
-        # Moderate safety (default)
-        config = SafetyConfig.create_default()
+        from examples.safe_generation import BasicToxicityChecker
+        from transformers.generation.safety import SafetyConfig
 
-        # Strict safety
-        config = SafetyConfig.create_default("strict")
+        # Create checker
+        checker = BasicToxicityChecker(threshold=0.7)
 
-        # Lenient safety
-        config = SafetyConfig.create_default("lenient")
+        # Create config with checker
+        config = SafetyConfig.from_checker(checker)
+
+        # Construct checker (returns the same instance)
+        safety_checker = config.construct_checker()
         ```
         """
-        configs = {
-            "strict": {
-                "threshold": 0.5,
-                "return_violations": True,
-                "return_metadata": True,
-                "cache_size": 50,
-                "unsafe_hash_limit": 500,
-            },
-            "moderate": {
-                "threshold": 0.7,
-                "return_violations": False,
-                "return_metadata": False,
-                "cache_size": 100,
-                "unsafe_hash_limit": 1000,
-            },
-            "lenient": {
-                "threshold": 0.9,
-                "return_violations": False,
-                "return_metadata": False,
-                "cache_size": 200,
-                "unsafe_hash_limit": 2000,
-            },
-        }
+        if self.checker is None:
+            raise ValueError(
+                "SafetyConfig requires a checker instance. "
+                "You must provide a SafetyChecker when creating the configuration. "
+                "See examples/safe_generation/ for reference implementations:\n\n"
+                "  from examples.safe_generation import BasicToxicityChecker\n"
+                "  checker = BasicToxicityChecker(threshold=0.7)\n"
+                "  config = SafetyConfig.from_checker(checker)\n\n"
+                "Or implement your own custom checker by inheriting from SafetyChecker."
+            )
+        return self.checker
 
-        if level not in configs:
-            available_levels = list(configs.keys())
-            raise ValueError(f"Unknown safety level: '{level}'. Available levels: {available_levels}")
+    @classmethod
+    def from_checker(cls, checker: SafetyChecker, **kwargs) -> SafetyConfig:
+        """
+        Create a SafetyConfig from a safety checker instance.
 
-        level_config = configs[level]
-        return cls(
-            enabled=True,
-            thresholds={"toxicity": level_config["threshold"]},
-            cache_size=level_config["cache_size"],
-            unsafe_hash_limit=level_config["unsafe_hash_limit"],
-            return_violations=level_config["return_violations"],
-            return_metadata=level_config["return_metadata"],
+        This is the recommended way to create a SafetyConfig.
+
+        Args:
+            checker (`SafetyChecker`): The safety checker instance to use.
+            **kwargs: Additional configuration parameters to override defaults.
+
+        Returns:
+            `SafetyConfig`: A SafetyConfig instance with the provided checker.
+
+        Examples:
+        ```python
+        from examples.safe_generation import BasicToxicityChecker
+        from transformers.generation.safety import SafetyConfig
+
+        # Create checker
+        checker = BasicToxicityChecker(threshold=0.7)
+
+        # Create config from checker
+        config = SafetyConfig.from_checker(checker)
+
+        # With additional parameters
+        config = SafetyConfig.from_checker(
+            checker,
+            cache_size=200,
+            return_violations=True
         )
+        ```
+        """
+        return cls(enabled=True, checker=checker, **kwargs)
+
+
+# Preset configuration kwargs for convenience
+# These replace the deprecated create_default() method
+# Usage: SafetyConfig.from_checker(checker, **STRICT_PRESET)
+
+STRICT_PRESET = {
+    "cache_size": 50,
+    "unsafe_hash_limit": 500,
+    "return_violations": True,
+    "return_metadata": True,
+}
+
+MODERATE_PRESET = {
+    "cache_size": 100,
+    "unsafe_hash_limit": 1000,
+    "return_violations": False,
+    "return_metadata": False,
+}
+
+LENIENT_PRESET = {
+    "cache_size": 200,
+    "unsafe_hash_limit": 2000,
+    "return_violations": False,
+    "return_metadata": False,
+}

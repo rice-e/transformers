@@ -16,6 +16,7 @@ import hashlib
 import logging
 import time
 from collections import OrderedDict
+from typing import Optional
 
 import torch
 
@@ -88,7 +89,7 @@ class _PrefixSafetyCache:
     def __init__(
         self,
         max_size: int = DEFAULT_CACHE_SIZE,
-        prefix_lengths: list[int] = None,
+        prefix_lengths: Optional[list[int]] = None,
         min_text_length_for_prefix: int = 50,
     ):
         self.max_size = max_size
@@ -369,16 +370,17 @@ class SafetyLogitsProcessor(LogitsProcessor, _SlidingWindowSafetyMixin):
 
     ```python
     >>> from transformers import AutoTokenizer, AutoModelForCausalLM
-    >>> from transformers.generation.safety import SafetyLogitsProcessor, BasicToxicityChecker, SafetyConfig
+    >>> from transformers.generation.safety import SafetyLogitsProcessor, SafetyConfig
+    >>> from examples.safe_generation import BasicToxicityChecker
 
     >>> # Initialize model and tokenizer
     >>> model = AutoModelForCausalLM.from_pretrained("gpt2")
     >>> tokenizer = AutoTokenizer.from_pretrained("gpt2")
     >>> tokenizer.pad_token = tokenizer.eos_token
 
-    >>> # Create safety components
-    >>> safety_config = SafetyConfig.create_default("moderate")
+    >>> # Create safety checker and config
     >>> safety_checker = BasicToxicityChecker()
+    >>> safety_config = SafetyConfig.from_checker(safety_checker)
     >>> safety_processor = SafetyLogitsProcessor(
     ...     safety_checker=safety_checker,
     ...     tokenizer=tokenizer,
@@ -601,16 +603,17 @@ class SafetyStoppingCriteria(StoppingCriteria, _SlidingWindowSafetyMixin):
 
     ```python
     >>> from transformers import AutoTokenizer, AutoModelForCausalLM
-    >>> from transformers.generation.safety import SafetyStoppingCriteria, BasicToxicityChecker, SafetyConfig
+    >>> from transformers.generation.safety import SafetyStoppingCriteria, SafetyConfig
+    >>> from examples.safe_generation import BasicToxicityChecker
 
     >>> # Initialize model and tokenizer
     >>> model = AutoModelForCausalLM.from_pretrained("gpt2")
     >>> tokenizer = AutoTokenizer.from_pretrained("gpt2")
     >>> tokenizer.pad_token = tokenizer.eos_token
 
-    >>> # Create safety components
-    >>> safety_config = SafetyConfig.create_default("moderate")
+    >>> # Create safety checker and config
     >>> safety_checker = BasicToxicityChecker()
+    >>> safety_config = SafetyConfig.from_checker(safety_checker)
     >>> safety_stopping = SafetyStoppingCriteria(
     ...     safety_checker=safety_checker,
     ...     tokenizer=tokenizer,
